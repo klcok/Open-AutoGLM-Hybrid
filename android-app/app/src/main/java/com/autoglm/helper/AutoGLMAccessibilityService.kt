@@ -78,6 +78,17 @@ class AutoGLMAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * 获取当前前台窗口的包名（用于 Python 端识别当前应用）
+     */
+    fun getCurrentPackageName(): String? {
+        return try {
+            rootInActiveWindow?.packageName?.toString()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
      * 执行点击操作
      */
     fun performTap(x: Int, y: Int): Boolean {
@@ -225,7 +236,8 @@ class AutoGLMAccessibilityService : AccessibilityService() {
                 
                 if (bitmap != null) {
                     val outputStream = ByteArrayOutputStream()
-                    bitmap!!.compress(Bitmap.CompressFormat.JPEG, 80, outputStream)
+                    // Use PNG so Python side can safely embed as data:image/png;base64,...
+                    bitmap!!.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
                     val bytes = outputStream.toByteArray()
                     bitmap!!.recycle()
                     Base64.encodeToString(bytes, Base64.NO_WRAP)

@@ -83,7 +83,8 @@ class MainActivity : Activity() {
     private fun testConnection() {
         Thread {
             try {
-                val url = URL("http://localhost:${AutoGLMAccessibilityService.PORT}/status")
+                // Use 127.0.0.1 instead of localhost to avoid DNS/IPv6 quirks on some devices
+                val url = URL("http://127.0.0.1:${AutoGLMAccessibilityService.PORT}/status")
                 val connection = url.openConnection() as HttpURLConnection
                 connection.requestMethod = "GET"
                 connection.connectTimeout = 3000

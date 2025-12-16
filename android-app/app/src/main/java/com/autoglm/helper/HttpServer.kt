@@ -20,6 +20,7 @@ class HttpServer(private val service: AutoGLMAccessibilityService, port: Int = 8
         return try {
             when {
                 uri == "/status" && method == Method.GET -> handleStatus()
+                uri == "/current_app" && method == Method.GET -> handleCurrentApp()
                 uri == "/screenshot" && method == Method.GET -> handleScreenshot()
                 uri == "/tap" && method == Method.POST -> handleTap(session)
                 uri == "/swipe" && method == Method.POST -> handleSwipe(session)
@@ -47,6 +48,19 @@ class HttpServer(private val service: AutoGLMAccessibilityService, port: Int = 8
         json.put("version", "1.0.0")
         json.put("accessibility_enabled", service.isAccessibilityEnabled())
         
+        return newFixedLengthResponse(
+            Response.Status.OK,
+            "application/json",
+            json.toString()
+        )
+    }
+
+    private fun handleCurrentApp(): Response {
+        val json = JSONObject()
+        json.put("status", "ok")
+        json.put("accessibility_enabled", service.isAccessibilityEnabled())
+        json.put("package", service.getCurrentPackageName())
+
         return newFixedLengthResponse(
             Response.Status.OK,
             "application/json",
