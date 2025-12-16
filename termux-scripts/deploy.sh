@@ -205,7 +205,8 @@ export PHONE_AGENT_MODEL="gpt-4-vision-preview"
 export AUTOGLM_HELPER_URL="http://localhost:8080"
 EOF
     
-    # 添加到 .bashrc
+    # 添加到 .bashrc（部分 Termux 环境默认不存在该文件）
+    touch ~/.bashrc
     if ! grep -q "source ~/.autoglm/config.sh" ~/.bashrc; then
         echo "" >> ~/.bashrc
         echo "# AutoGLM 配置" >> ~/.bashrc
@@ -223,6 +224,7 @@ create_launcher() {
     print_info "创建启动脚本..."
     
     # 创建 autoglm 命令
+    mkdir -p ~/bin
     cat > ~/bin/autoglm << 'LAUNCHER_EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 
@@ -237,6 +239,7 @@ LAUNCHER_EOF
     chmod +x ~/bin/autoglm
     
     # 确保 ~/bin 在 PATH 中
+    touch ~/.bashrc
     if ! grep -q 'export PATH=$PATH:~/bin' ~/.bashrc; then
         echo 'export PATH=$PATH:~/bin' >> ~/.bashrc
     fi
