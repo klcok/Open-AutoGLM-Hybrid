@@ -23,6 +23,7 @@ class HttpServer(private val service: AutoGLMAccessibilityService, port: Int = 8
                 uri == "/current_app" && method == Method.GET -> handleCurrentApp()
                 uri == "/screenshot" && method == Method.GET -> handleScreenshot()
                 uri == "/launch" && method == Method.POST -> handleLaunch(session)
+                uri == "/resolve" && method == Method.POST -> handleResolve(session)
                 uri == "/tap" && method == Method.POST -> handleTap(session)
                 uri == "/swipe" && method == Method.POST -> handleSwipe(session)
                 uri == "/input" && method == Method.POST -> handleInput(session)
@@ -114,6 +115,34 @@ class HttpServer(private val service: AutoGLMAccessibilityService, port: Int = 8
         resp.put("success", success)
         if (!success) {
             resp.put("error", "Failed to launch package")
+        }
+
+        return newFixedLengthResponse(
+            Response.Status.OK,
+            "application/json",
+            resp.toString()
+        )
+    }
+
+    private fun handleResolve(session: IHTTPSession): Response {
+        val body = getRequestBody(session)
+        val json = JSONObject(body)
+
+        val name = json.optString("name", "").trim()
+        if (name.isEmpty()) {
+            return newFixedLengthResponse(
+                Response.Status.BAD_REQUEST,
+                "application/json",
+                """{"success": false, "error": "Missing 'name'"}"""
+            )
+        }
+
+        val pkg = service.resolvePackageByLabel(name)
+        val resp = JSONObject()
+        resp.put("success", pkg != null)
+        resp.put("package", pkg)
+        if (pkg == null) {
+            resp.put("error", "No matching app")
         }
 
         return newFixedLengthResponse(

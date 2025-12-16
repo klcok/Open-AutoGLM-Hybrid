@@ -585,6 +585,13 @@ def _looks_like_package(s: str) -> bool:
     # Most package names are lowercase + digits + underscore + dot
     return True
 
+def _resolve_package_via_helper(name: str) -> str | None:
+    # Ask Helper to resolve label -> package
+    resp = _helper_post("/resolve", {"name": name}, timeout=5)
+    if resp and resp.get("success") and resp.get("package"):
+        return str(resp.get("package"))
+    return None
+
 
 def get_current_app(device_id: str | None = None) -> str:
     """
@@ -735,6 +742,9 @@ def launch_app(app_name: str, device_id: str | None = None, delay: float = LAUNC
         package = app_name
     elif app_name in APP_PACKAGES:
         package = APP_PACKAGES[app_name]
+    else:
+        # Try resolve by installed app label (Chinese/English)
+        package = _resolve_package_via_helper(app_name)
 
     if not package:
         return False

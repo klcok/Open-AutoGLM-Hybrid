@@ -3,6 +3,7 @@ package com.autoglm.helper
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Intent
+import android.content.pm.ResolveInfo
 import android.graphics.Bitmap
 import android.graphics.Path
 import android.os.Build
@@ -100,6 +101,49 @@ class AutoGLMAccessibilityService : AccessibilityService() {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to launch package: $packageName", e)
             false
+        }
+    }
+
+    /**
+     * 根据应用显示名（中文/英文）解析包名。
+     * 返回第一个匹配的可启动应用包名；找不到返回 null。
+     */
+    fun resolvePackageByLabel(query: String): String? {
+        val q = query.trim()
+        if (q.isEmpty()) return null
+
+        return try {
+            val pm = packageManager
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val activities: List<ResolveInfo> = pm.queryIntentActivities(intent, 0)
+
+            // Collect candidates: (score, packageName)
+            var bestPkg: String? = null
+            var bestScore = -1
+
+            for (ri in activities) {
+                val pkg = ri.activityInfo?.packageName ?: continue
+                val label = (ri.loadLabel(pm)?.toString() ?: "").trim()
+                if (label.isEmpty()) continue
+
+                val score = when {
+                    label == q -> 100
+                    label.equals(q, ignoreCase = true) -> 95
+                    label.contains(q) -> 80
+                    label.contains(q, ignoreCase = true) -> 75
+                    else -> -1
+                }
+                if (score > bestScore) {
+                    bestScore = score
+                    bestPkg = pkg
+                    if (score >= 100) break
+                }
+            }
+
+            bestPkg
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to resolve package for query: $query", e)
+            null
         }
     }
 
