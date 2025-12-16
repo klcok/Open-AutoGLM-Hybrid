@@ -75,6 +75,14 @@ install_dependencies() {
     else
         print_success "pip 已安装: $(pip --version)"
     fi
+
+    # Pillow 在 Termux 上优先使用预编译包，避免从源码编译失败/耗时
+    if ! python -c "import PIL" &> /dev/null; then
+        print_info "安装 python-pillow (Termux)..."
+        pkg install python-pillow -y
+    else
+        print_success "Pillow 已安装"
+    fi
     
     # 检查并安装 Git
     if ! command -v git &> /dev/null; then
@@ -98,16 +106,16 @@ install_python_packages() {
     # 如需升级 pip，请使用：pkg upgrade python-pip
 
     # 兼容 Termux(Python 3.12)：
-    # - Open-AutoGLM 的 requirements.txt 要求 openai>=2.x
-    # - 但 openai>=1.40.0（以及 2.x）会依赖 jiter（需要 Rust，且在 Termux/py312 上容易失败）
-    # 这里固定到 openai==1.39.0（已验证为 1.x 中最后一个不依赖 jiter 的版本）
+    # - openai>=1.40.0/2.x 会引入 Rust 依赖（jiter/pydantic-core 等），Termux 上经常缺 wheel
+    # - 这里固定 openai==1.39.0，并固定 pydantic<2（避免 pydantic-core）
     mkdir -p ~/.autoglm
     cat > ~/.autoglm/constraints.txt << 'EOF'
 openai==1.39.0
+pydantic<2
 EOF
     
     # 安装依赖
-    pip install --retries 10 --default-timeout 120 pillow "openai==1.39.0" requests
+    pip install --retries 10 --default-timeout 120 "openai==1.39.0" "pydantic<2" requests
     
     print_success "Python 依赖安装完成"
 }
@@ -139,14 +147,11 @@ install_autoglm() {
     print_info "安装 Open-AutoGLM..."
     
     cd ~/Open-AutoGLM
-    
-    # 安装项目依赖
-    if [ -f "requirements.txt" ]; then
-        pip install -r requirements.txt -c ~/.autoglm/constraints.txt
-    fi
-    
-    # 安装 phone_agent
-    pip install -e . -c ~/.autoglm/constraints.txt
+
+    # Termux 兼容策略：
+    # - Open-AutoGLM 的 requirements/setup.py 会要求 openai>=2.9.0 与 Pillow>=12（在 Termux 上会触发源码编译/依赖冲突）
+    # - 我们已经提前用 pkg/pip 装好了可用依赖，所以这里用 --no-deps 跳过依赖解析
+    pip install -e . --no-deps
     
     print_success "Open-AutoGLM 安装完成"
 }
