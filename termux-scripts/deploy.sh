@@ -233,7 +233,7 @@ source ~/.autoglm/config.sh
 
 # 启动 AutoGLM
 cd ~/Open-AutoGLM
-python -m phone_agent.cli
+python main.py
 LAUNCHER_EOF
     
     chmod +x ~/bin/autoglm
