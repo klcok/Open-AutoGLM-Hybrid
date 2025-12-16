@@ -798,6 +798,7 @@ def get_screenshot(device_id: str | None = None, timeout: int = 5) -> Screenshot
                     img.save(buffered, format="PNG")
                     b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
                     return Screenshot(base64_data=b64, width=width, height=height, is_sensitive=False)
+                # Helper reachable but cannot screenshot (common on some ROMs)
         except Exception:
             # Helper not reachable: fall back to ADB
             pass
@@ -821,7 +822,8 @@ def get_screenshot(device_id: str | None = None, timeout: int = 5) -> Screenshot
             timeout=5,
         )
         if not os.path.exists(temp_path):
-            return _create_fallback_screenshot(is_sensitive=False)
+            # If neither helper nor adb produced an image, treat as sensitive/unavailable to stop the loop
+            return _create_fallback_screenshot(is_sensitive=True)
         img = Image.open(temp_path)
         width, height = img.size
         buffered = BytesIO()
@@ -831,7 +833,7 @@ def get_screenshot(device_id: str | None = None, timeout: int = 5) -> Screenshot
         return Screenshot(base64_data=base64_data, width=width, height=height, is_sensitive=False)
     except Exception as e:
         print(f"Screenshot error: {e}")
-        return _create_fallback_screenshot(is_sensitive=False)
+        return _create_fallback_screenshot(is_sensitive=True)
 
 
 def _get_adb_prefix(device_id: str | None) -> list:
