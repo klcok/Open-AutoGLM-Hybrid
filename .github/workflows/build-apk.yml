@@ -21,14 +21,22 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          yes | sdkmanager --licenses
 
       - name: Build Debug APK
         working-directory: android-app
         run: |
           chmod +x ./gradlew
-          ./gradlew --no-daemon assembleDebug
+          ./gradlew --no-daemon --stacktrace --info assembleDebug
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
@@ -37,3 +45,15 @@ jobs:
           path: android-app/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Upload build reports (always)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports
+          path: |
+            android-app/app/build/reports
+            android-app/build/reports
+            android-app/app/build/outputs/logs
+          if-no-files-found: ignore
+          retention-days: 7
