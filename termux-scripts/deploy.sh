@@ -97,16 +97,17 @@ install_python_packages() {
     # 注意：Termux 禁止使用 `pip install --upgrade pip`
     # 如需升级 pip，请使用：pkg upgrade python-pip
 
-    # 兼容 Termux(Python 3.12)：Open-AutoGLM 的 requirements.txt 要求 openai>=2.x，
-    # 但 openai 2.x 会依赖 jiter（需要 Rust 且在部分平台/py312 上不可用）。
-    # 这里通过 constraints 强制 openai<2，避免安装失败。
+    # 兼容 Termux(Python 3.12)：
+    # - Open-AutoGLM 的 requirements.txt 要求 openai>=2.x
+    # - 但 openai>=1.40.0（以及 2.x）会依赖 jiter（需要 Rust，且在 Termux/py312 上容易失败）
+    # 这里固定到 openai==1.39.0（已验证为 1.x 中最后一个不依赖 jiter 的版本）
     mkdir -p ~/.autoglm
     cat > ~/.autoglm/constraints.txt << 'EOF'
-openai<2
+openai==1.39.0
 EOF
     
     # 安装依赖
-    pip install pillow "openai<2" requests
+    pip install --retries 10 --default-timeout 120 pillow "openai==1.39.0" requests
     
     print_success "Python 依赖安装完成"
 }
