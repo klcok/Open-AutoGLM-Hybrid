@@ -929,6 +929,32 @@ if agent_py.exists():
             agent_py.write_text(s, encoding=\"utf-8\")
 PY
 
+    # 6) Increase model API timeout/retries (cloud endpoints can be slow/flaky on mobile networks)
+    python - <<'PY'
+from pathlib import Path
+import re
+
+client_py = Path.home() / "Open-AutoGLM" / "phone_agent" / "model" / "client.py"
+if client_py.exists():
+    s = client_py.read_text(encoding="utf-8", errors="ignore")
+    marker = "# === Hybrid: resilient OpenAI client init ==="
+    if marker not in s:
+        # Replace the first occurrence of OpenAI(...) initialization in ModelClient.__init__
+        pat = r"self\.client\s*=\s*OpenAI\(\s*base_url=base_url,\s*api_key=api_key\s*\)"
+        repl = (
+            marker
+            + "\n        timeout_s = float(os.getenv('PHONE_AGENT_TIMEOUT', '60'))\n"
+            + "        try:\n"
+            + "            self.client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout_s, max_retries=5)\n"
+            + "        except TypeError:\n"
+            + "            # Fallback for older SDK signatures\n"
+            + "            self.client = OpenAI(base_url=base_url, api_key=api_key)\n"
+        )
+        s2, n = re.subn(pat, repl, s, count=1)
+        if n:
+            client_py.write_text(s2, encoding="utf-8")
+PY
+
     print_success "Open-AutoGLM 补丁完成（Helper 优先，ADB Keyboard 不再是硬依赖）"
 }
 
