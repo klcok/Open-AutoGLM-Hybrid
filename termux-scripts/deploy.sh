@@ -846,6 +846,54 @@ SCREENSHOT_TIMEOUT = 5
 PY
     fi
 
+    # 4) Make action parsing tolerant to multi-line strings (prevents "unterminated string literal")
+    python - <<'PY'
+from pathlib import Path
+
+handler_py = Path.home() / "Open-AutoGLM" / "phone_agent" / "actions" / "handler.py"
+if handler_py.exists():
+    s = handler_py.read_text(encoding="utf-8", errors="ignore")
+    marker = "# === Hybrid multiline-safe action parse ==="
+    if marker not in s and "def parse_action" in s:
+        # Insert right after the first "response = response.strip()" inside parse_action
+        needle = "        response = response.strip()\n"
+        if needle in s:
+            insert = (
+                needle
+                + f"        {marker}\n"
+                + "        # Some providers/models may return do(...message=\"...\\n...\") with literal newlines.\n"
+                + "        # Escape newlines so Python-eval/ast parsing won't crash.\n"
+                + "        response = response.replace(\"\\r\\n\", \"\\n\").replace(\"\\n\", \"\\\\n\")\n"
+            )
+            s = s.replace(needle, insert, 1)
+            handler_py.write_text(s, encoding="utf-8")
+PY
+
+    # 5) Short-circuit on sensitive screens to avoid wasted calls and confusing errors
+    python - <<'PY'
+from pathlib import Path
+
+agent_py = Path.home() / "Open-AutoGLM" / "phone_agent" / "agent.py"
+if agent_py.exists():
+    s = agent_py.read_text(encoding="utf-8", errors="ignore")
+    marker = "# === Hybrid sensitive-screen short-circuit ==="
+    if marker not in s and "get_screenshot" in s and "StepResult" in s:
+        needle = "        screenshot = get_screenshot(self.agent_config.device_id)\n"
+        if needle in s:
+            insert = (
+                needle
+                + f"        {marker}\n"
+                + "        if getattr(screenshot, 'is_sensitive', False):\n"
+                + "            msg = (\n"
+                + "                '检测到当前界面为敏感/防截屏页面（截图为黑屏）。\\n'\n"
+                + "                '这类页面无法获取图像用于识别，请你手动完成登录/验证/支付等步骤，进入正常页面后再继续运行。'\n"
+                + "            )\n"
+                + "            return StepResult(success=False, finished=True, action=finish(message=msg), thinking='', message=msg)\n"
+            )
+            s = s.replace(needle, insert, 1)
+            agent_py.write_text(s, encoding=\"utf-8\")
+PY
+
     print_success "Open-AutoGLM 补丁完成（Helper 优先，ADB Keyboard 不再是硬依赖）"
 }
 
