@@ -290,6 +290,34 @@ check_helper_app() {
     fi
 }
 
+# 安装并启用 ADB Keyboard（用于可靠文本输入）
+ensure_adb_keyboard() {
+    print_info "检查 ADB Keyboard..."
+
+    if adb shell pm list packages com.android.adbkeyboard 2>/dev/null | grep -q "com.android.adbkeyboard"; then
+        print_success "ADB Keyboard 已安装"
+        return
+    fi
+
+    print_warning "未检测到 ADB Keyboard，开始安装..."
+
+    cd ~
+    APK_PATH="$HOME/ADBKeyboard.apk"
+    curl -L -o "$APK_PATH" "https://raw.githubusercontent.com/senzhk/ADBKeyBoard/master/ADBKeyboard.apk"
+
+    adb install -r "$APK_PATH" || {
+        print_error "ADB Keyboard 安装失败"
+        print_info "请手动安装：adb install ADBKeyboard.apk"
+        return
+    }
+
+    # 尝试启用并切换输入法（不同系统可能限制，失败则提示手动开启）
+    adb shell ime enable com.android.adbkeyboard/.AdbIME >/dev/null 2>&1 || true
+    adb shell ime set com.android.adbkeyboard/.AdbIME >/dev/null 2>&1 || true
+
+    print_success "ADB Keyboard 安装完成（如仍未生效，请在系统设置里启用并切换到 ADB Keyboard）"
+}
+
 # 显示完成信息
 show_completion() {
     print_success "部署完成！"
@@ -339,6 +367,7 @@ main() {
     download_hybrid_scripts
     configure_grsai
     create_launcher
+    ensure_adb_keyboard
     check_helper_app
     show_completion
 }
