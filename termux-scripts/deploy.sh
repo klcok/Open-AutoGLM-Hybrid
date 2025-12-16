@@ -67,6 +67,14 @@ install_dependencies() {
     else
         print_success "Python 已安装: $(python --version)"
     fi
+
+    # Termux 中的 pip 必须通过包管理器安装/升级（不要用 pip 自己装/升级 pip）
+    if ! command -v pip &> /dev/null; then
+        print_info "安装 python-pip (Termux)..."
+        pkg install python-pip -y
+    else
+        print_success "pip 已安装: $(pip --version)"
+    fi
     
     # 检查并安装 Git
     if ! command -v git &> /dev/null; then
@@ -85,9 +93,9 @@ install_dependencies() {
 # 安装 Python 依赖
 install_python_packages() {
     print_info "安装 Python 依赖包..."
-    
-    # 升级 pip
-    pip install --upgrade pip
+
+    # 注意：Termux 禁止使用 `pip install --upgrade pip`
+    # 如需升级 pip，请使用：pkg upgrade python-pip
     
     # 安装依赖
     pip install pillow openai requests
