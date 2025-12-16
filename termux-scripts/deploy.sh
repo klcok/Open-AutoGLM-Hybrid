@@ -780,6 +780,40 @@ def _get_helper_url() -> str | None:
         return None
     return url.rstrip("/")
 
+def _compress_image(img: Image.Image) -> Image.Image:
+    """
+    Reduce image size to speed up uploads.
+
+    Environment variables:
+      - PHONE_AGENT_MAX_IMAGE_WIDTH (default: 720)
+      - PHONE_AGENT_MAX_IMAGE_PIXELS (default: 1200000)  # ~1.2MP
+    """
+    try:
+        max_w = int(os.getenv("PHONE_AGENT_MAX_IMAGE_WIDTH", "720"))
+    except Exception:
+        max_w = 720
+
+    try:
+        max_px = int(os.getenv("PHONE_AGENT_MAX_IMAGE_PIXELS", "1200000"))
+    except Exception:
+        max_px = 1200000
+
+    w, h = img.size
+    scale = 1.0
+
+    if max_w > 0 and w > max_w:
+        scale = min(scale, max_w / float(w))
+
+    if max_px > 0 and (w * h) > max_px:
+        scale = min(scale, (max_px / float(w * h)) ** 0.5)
+
+    if scale < 0.999:
+        new_w = max(1, int(w * scale))
+        new_h = max(1, int(h * scale))
+        img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    return img
+
 
 def get_screenshot(device_id: str | None = None, timeout: int = 5) -> Screenshot:
     helper = _get_helper_url()
@@ -793,9 +827,11 @@ def get_screenshot(device_id: str | None = None, timeout: int = 5) -> Screenshot
                 if data.get("success") and data.get("image"):
                     raw = base64.b64decode(data["image"])
                     img = Image.open(BytesIO(raw))
+                    img = _compress_image(img)
                     width, height = img.size
                     buffered = BytesIO()
-                    img.save(buffered, format="PNG")
+                    # PNG with compression (keeps MessageBuilder's data:image/png;base64,...)
+                    img.save(buffered, format="PNG", optimize=True, compress_level=6)
                     b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
                     return Screenshot(base64_data=b64, width=width, height=height, is_sensitive=False)
                 # Helper reachable but cannot screenshot (common on some ROMs)
@@ -825,9 +861,10 @@ def get_screenshot(device_id: str | None = None, timeout: int = 5) -> Screenshot
             # If neither helper nor adb produced an image, treat as sensitive/unavailable to stop the loop
             return _create_fallback_screenshot(is_sensitive=True)
         img = Image.open(temp_path)
+        img = _compress_image(img)
         width, height = img.size
         buffered = BytesIO()
-        img.save(buffered, format="PNG")
+        img.save(buffered, format="PNG", optimize=True, compress_level=6)
         base64_data = base64.b64encode(buffered.getvalue()).decode("utf-8")
         os.remove(temp_path)
         return Screenshot(base64_data=base64_data, width=width, height=height, is_sensitive=False)
@@ -846,7 +883,7 @@ def _create_fallback_screenshot(is_sensitive: bool) -> Screenshot:
     default_width, default_height = 1080, 2400
     black_img = Image.new("RGB", (default_width, default_height), color="black")
     buffered = BytesIO()
-    black_img.save(buffered, format="PNG")
+    black_img.save(buffered, format="PNG", optimize=True, compress_level=6)
     base64_data = base64.b64encode(buffered.getvalue()).decode("utf-8")
     return Screenshot(
         base64_data=base64_data,
