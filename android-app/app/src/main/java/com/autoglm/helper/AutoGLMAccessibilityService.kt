@@ -89,6 +89,21 @@ class AutoGLMAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * 通过包名启动应用（用于 Python 端通过包名直接打开 App）
+     */
+    fun launchPackage(packageName: String): Boolean {
+        return try {
+            val intent = packageManager.getLaunchIntentForPackage(packageName) ?: return false
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to launch package: $packageName", e)
+            false
+        }
+    }
+
+    /**
      * 执行点击操作
      */
     fun performTap(x: Int, y: Int): Boolean {

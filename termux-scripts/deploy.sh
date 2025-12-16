@@ -519,8 +519,8 @@ PY
 
 Hybrid mode:
 - If AUTOGLM_HELPER_URL is set, use AutoGLM Helper accessibility for tap/swipe/long-press
-  and optionally current app detection.
-- Keep ADB as fallback for actions not covered by Helper (launch/back/home, etc.).
+  and optionally current app detection and launching by package.
+- Keep ADB as fallback for actions not covered by Helper (back/home, etc.).
 """
 
 import json
@@ -574,6 +574,16 @@ def _helper_post(path: str, payload: dict, timeout: int = 5) -> dict | None:
         return json.loads(body)
     except Exception:
         return None
+
+
+def _looks_like_package(s: str) -> bool:
+    # Heuristic: contains dots, no spaces, and is ASCII-ish
+    if not s or " " in s:
+        return False
+    if "." not in s:
+        return False
+    # Most package names are lowercase + digits + underscore + dot
+    return True
 
 
 def get_current_app(device_id: str | None = None) -> str:
@@ -718,10 +728,25 @@ def home(device_id: str | None = None, delay: float = ACTION_DELAY) -> None:
 
 
 def launch_app(app_name: str, device_id: str | None = None, delay: float = LAUNCH_DELAY) -> bool:
-    if app_name not in APP_PACKAGES:
+    package = None
+
+    # Allow passing package name directly
+    if _looks_like_package(app_name) and app_name not in APP_PACKAGES:
+        package = app_name
+    elif app_name in APP_PACKAGES:
+        package = APP_PACKAGES[app_name]
+
+    if not package:
         return False
+
+    # Prefer Helper launch (no ADB required)
+    resp = _helper_post("/launch", {"package": package}, timeout=5)
+    if resp and resp.get("success") is True:
+        time.sleep(delay)
+        return True
+
+    # Fallback to ADB monkey
     adb_prefix = _get_adb_prefix(device_id)
-    package = APP_PACKAGES[app_name]
     subprocess.run(
         adb_prefix
         + [
