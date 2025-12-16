@@ -116,14 +116,16 @@ install_python_packages() {
     # 兼容 Termux(Python 3.12)：
     # - openai>=1.40.0/2.x 会引入 Rust 依赖（jiter/pydantic-core 等），Termux 上经常缺 wheel
     # - 这里固定 openai==1.39.0，并固定 pydantic<2（避免 pydantic-core）
+    # - openai==1.39.0 与 httpx>=0.28 不兼容（httpx 移除了 proxies 参数），需要固定 httpx<0.28
     mkdir -p ~/.autoglm
     cat > ~/.autoglm/constraints.txt << 'EOF'
 openai==1.39.0
 pydantic<2
+httpx<0.28
 EOF
     
     # 安装依赖
-    pip install --retries 10 --default-timeout 120 "openai==1.39.0" "pydantic<2" requests
+    pip install --retries 10 --default-timeout 120 "openai==1.39.0" "pydantic<2" "httpx<0.28" requests
     
     print_success "Python 依赖安装完成"
 }
