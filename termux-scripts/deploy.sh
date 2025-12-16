@@ -91,6 +91,14 @@ install_dependencies() {
     else
         print_success "Git 已安装: $(git --version)"
     fi
+
+    # 检查并安装 ADB（Open-AutoGLM 默认依赖 adb 与设备通信）
+    if ! command -v adb &> /dev/null; then
+        print_info "安装 Android platform-tools (adb)..."
+        pkg install android-tools -y
+    else
+        print_success "ADB 已安装: $(adb version | head -n 1)"
+    fi
     
     # 安装其他工具
     pkg install curl wget -y
