@@ -188,45 +188,80 @@ PYTHON_EOF
     print_success "混合方案脚本下载完成"
 }
 
-# 配置 GRS AI
-configure_grsai() {
-    print_info "配置 GRS AI..."
-    
+# 配置模型 API（GRS AI / ModelScope / 保留已有配置）
+configure_model_api() {
+    print_info "配置模型 API..."
+
+    mkdir -p ~/.autoglm
+    touch ~/.bashrc
+
+    # 如果已有配置，默认不覆盖（防止你手动切到 ModelScope 后又被 deploy 覆盖回去）
+    if [ -f ~/.autoglm/config.sh ]; then
+        echo ""
+        print_success "检测到已有配置文件: ~/.autoglm/config.sh"
+        echo "当前配置摘要:"
+        echo "  PHONE_AGENT_BASE_URL=$(grep -E '^export PHONE_AGENT_BASE_URL=' ~/.autoglm/config.sh | head -n 1 | cut -d= -f2- | tr -d '\"')"
+        echo "  PHONE_AGENT_MODEL=$(grep -E '^export PHONE_AGENT_MODEL=' ~/.autoglm/config.sh | head -n 1 | cut -d= -f2- | tr -d '\"')"
+        echo ""
+        read -p "是否保留现有配置并跳过本步骤? (y/n): " keep_cfg
+        if [ "$keep_cfg" = "y" ]; then
+            source ~/.autoglm/config.sh
+            print_success "已保留现有配置"
+            return
+        fi
+    fi
+
     echo ""
-    echo "请输入您的 GRS AI API Key:"
-    read -p "API Key: " api_key
-    
-    if [ -z "$api_key" ]; then
-        print_warning "未输入 API Key，跳过配置"
-        print_warning "您可以稍后手动配置: export PHONE_AGENT_API_KEY='your_key'"
+    echo "请选择模型 API 提供方："
+    echo "  1) GRS AI (https://api.grsai.com/v1)"
+    echo "  2) ModelScope (https://api-inference.modelscope.cn/v1)"
+    echo "  3) 跳过（稍后手动配置）"
+    read -p "请输入选项 (1/2/3): " provider
+
+    if [ "$provider" = "3" ]; then
+        print_warning "已跳过模型 API 配置。你可以稍后编辑 ~/.autoglm/config.sh"
         return
     fi
-    
-    # 创建配置文件
+
+    # 读取 key（不回显）
+    echo ""
+    read -s -p "请输入 API Key（输入时不显示）: " api_key
+    echo ""
+    if [ -z "$api_key" ]; then
+        print_warning "未输入 API Key，跳过配置"
+        return
+    fi
+
+    if [ "$provider" = "2" ]; then
+        base_url="https://api-inference.modelscope.cn/v1"
+        model="ZhipuAI/AutoGLM-Phone-9B"
+    else
+        base_url="https://api.grsai.com/v1"
+        model="gpt-4-vision-preview"
+    fi
+
     cat > ~/.autoglm/config.sh << EOF
 #!/data/data/com.termux/files/usr/bin/bash
 
-# GRS AI 配置
-export PHONE_AGENT_BASE_URL="https://api.grsai.com/v1"
+# Model API 配置
+export PHONE_AGENT_BASE_URL="$base_url"
 export PHONE_AGENT_API_KEY="$api_key"
-export PHONE_AGENT_MODEL="gpt-4-vision-preview"
+export PHONE_AGENT_MODEL="$model"
 
 # AutoGLM Helper 配置
 export AUTOGLM_HELPER_URL="http://127.0.0.1:8080"
 EOF
-    
-    # 添加到 .bashrc（部分 Termux 环境默认不存在该文件）
-    touch ~/.bashrc
+
+    chmod 600 ~/.autoglm/config.sh
+
     if ! grep -q "source ~/.autoglm/config.sh" ~/.bashrc; then
         echo "" >> ~/.bashrc
         echo "# AutoGLM 配置" >> ~/.bashrc
         echo "source ~/.autoglm/config.sh" >> ~/.bashrc
     fi
-    
-    # 立即加载配置
+
     source ~/.autoglm/config.sh
-    
-    print_success "GRS AI 配置完成"
+    print_success "模型 API 配置完成"
 }
 
 # 创建启动脚本
@@ -944,7 +979,7 @@ main() {
     download_autoglm
     install_autoglm
     download_hybrid_scripts
-    configure_grsai
+    configure_model_api
     create_launcher
     patch_open_autoglm_for_helper
     check_helper_app
