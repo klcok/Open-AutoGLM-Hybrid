@@ -96,9 +96,17 @@ install_python_packages() {
 
     # 注意：Termux 禁止使用 `pip install --upgrade pip`
     # 如需升级 pip，请使用：pkg upgrade python-pip
+
+    # 兼容 Termux(Python 3.12)：Open-AutoGLM 的 requirements.txt 要求 openai>=2.x，
+    # 但 openai 2.x 会依赖 jiter（需要 Rust 且在部分平台/py312 上不可用）。
+    # 这里通过 constraints 强制 openai<2，避免安装失败。
+    mkdir -p ~/.autoglm
+    cat > ~/.autoglm/constraints.txt << 'EOF'
+openai<2
+EOF
     
     # 安装依赖
-    pip install pillow openai requests
+    pip install pillow "openai<2" requests
     
     print_success "Python 依赖安装完成"
 }
@@ -133,11 +141,11 @@ install_autoglm() {
     
     # 安装项目依赖
     if [ -f "requirements.txt" ]; then
-        pip install -r requirements.txt
+        pip install -r requirements.txt -c ~/.autoglm/constraints.txt
     fi
     
     # 安装 phone_agent
-    pip install -e .
+    pip install -e . -c ~/.autoglm/constraints.txt
     
     print_success "Open-AutoGLM 安装完成"
 }
