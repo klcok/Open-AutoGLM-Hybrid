@@ -30,9 +30,14 @@ jobs:
         ./gradlew assembleDebug --stacktrace
         
     - name: List APK files (debug)
-      run: find android-app/app/build/outputs/apk -name "*.apk" -type f
+      run: |
+        echo "=== Listing all APK files ==="
+        find android-app/app/build/outputs/apk -name "*.apk" -type f -exec ls -la {} \;
+        echo "=== Checking build directory ==="
+        ls -la android-app/app/build/outputs/apk/debug/ || echo "Debug directory not found"
         
     - name: Upload APK
+      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: AutoGLM-Helper-Debug
