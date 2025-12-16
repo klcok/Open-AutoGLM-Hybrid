@@ -817,6 +817,33 @@ def _create_fallback_screenshot(is_sensitive: bool) -> Screenshot:
     )
 PY
 
+    # 3) Ensure speed config exists (some forks/branches may miss it)
+    cfg_dir="$HOME/Open-AutoGLM/phone_agent/config"
+    mkdir -p "$cfg_dir"
+    touch "$cfg_dir/__init__.py" >/dev/null 2>&1 || true
+    if [ ! -f "$cfg_dir/speed.py" ]; then
+        cat > "$cfg_dir/speed.py" <<'PY'
+"""速度优化配置
+
+某些分支/精简版可能缺失此文件，导致 import phone_agent.config.speed 失败。
+这里提供默认值，确保 Open-AutoGLM 可运行。
+"""
+
+# 操作后延迟时间（秒）
+ACTION_DELAY = 0.3
+
+# 打开应用后延迟
+LAUNCH_DELAY = 0.5
+
+# 键盘切换/输入延迟（即使走 Helper 也会被 handler 引用）
+KEYBOARD_SWITCH_DELAY = 0.3
+TEXT_INPUT_DELAY = 0.2
+
+# 截图超时（备用）
+SCREENSHOT_TIMEOUT = 5
+PY
+    fi
+
     print_success "Open-AutoGLM 补丁完成（Helper 优先，ADB Keyboard 不再是硬依赖）"
 }
 
