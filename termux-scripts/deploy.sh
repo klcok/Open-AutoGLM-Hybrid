@@ -92,7 +92,7 @@ install_dependencies() {
         print_success "Git 已安装: $(git --version)"
     fi
 
-    # 检查并安装 ADB（Open-AutoGLM 默认依赖 adb 与设备通信）
+    # 检查并安装 ADB（混合方案中作为兜底/备用：如 Android < 11 截图、或 Helper 不可用时）
     if ! command -v adb &> /dev/null; then
         print_info "安装 Android platform-tools (adb)..."
         pkg install android-tools -y
@@ -210,7 +210,7 @@ export PHONE_AGENT_API_KEY="$api_key"
 export PHONE_AGENT_MODEL="gpt-4-vision-preview"
 
 # AutoGLM Helper 配置
-export AUTOGLM_HELPER_URL="http://localhost:8080"
+export AUTOGLM_HELPER_URL="http://127.0.0.1:8080"
 EOF
     
     # 添加到 .bashrc（部分 Termux 环境默认不存在该文件）
@@ -277,7 +277,7 @@ check_helper_app() {
     # 测试连接
     print_info "测试 AutoGLM Helper 连接..."
     
-    if curl -s http://localhost:8080/status > /dev/null 2>&1; then
+    if curl -s http://127.0.0.1:8080/status > /dev/null 2>&1; then
         print_success "AutoGLM Helper 连接成功！"
     else
         print_warning "无法连接到 AutoGLM Helper"
@@ -290,32 +290,534 @@ check_helper_app() {
     fi
 }
 
-# 安装并启用 ADB Keyboard（用于可靠文本输入）
-ensure_adb_keyboard() {
-    print_info "检查 ADB Keyboard..."
+patch_open_autoglm_for_helper() {
+    print_info "为 Open-AutoGLM 打补丁：优先使用 AutoGLM Helper（无障碍），避免强依赖 ADB Keyboard..."
 
-    if adb shell pm list packages com.android.adbkeyboard 2>/dev/null | grep -q "com.android.adbkeyboard"; then
-        print_success "ADB Keyboard 已安装"
+    if [ ! -d "$HOME/Open-AutoGLM" ]; then
+        print_warning "未找到 ~/Open-AutoGLM，跳过补丁"
         return
     fi
 
-    print_warning "未检测到 ADB Keyboard，开始安装..."
+    # 1) Patch main.py: 如果本地 Helper 可用，则跳过 ADB/ADB Keyboard 的系统自检
+    python - <<'PY'
+import os
+from pathlib import Path
 
-    cd ~
-    APK_PATH="$HOME/ADBKeyboard.apk"
-    curl -L -o "$APK_PATH" "https://raw.githubusercontent.com/senzhk/ADBKeyBoard/master/ADBKeyboard.apk"
+main_py = Path.home() / "Open-AutoGLM" / "main.py"
+if not main_py.exists():
+    raise SystemExit(0)
 
-    adb install -r "$APK_PATH" || {
-        print_error "ADB Keyboard 安装失败"
-        print_info "请手动安装：adb install ADBKeyboard.apk"
+s = main_py.read_text(encoding="utf-8")
+marker = "# === Hybrid(Helper) Patch ==="
+if marker not in s:
+    needle = "    all_passed = True\n"
+    if needle in s:
+        helper_block = (
+            f"{needle}"
+            f"\n"
+            f"    {marker}\n"
+            f"    helper_url = os.getenv(\"AUTOGLM_HELPER_URL\")\n"
+            f"    if helper_url:\n"
+            f"        try:\n"
+            f"            import json\n"
+            f"            from urllib.request import Request, urlopen\n"
+            f"            req = Request(helper_url.rstrip('/') + \"/status\")\n"
+            f"            with urlopen(req, timeout=2) as resp:\n"
+            f"                data = json.loads(resp.read().decode(\"utf-8\"))\n"
+            f"            if resp.status == 200 and data.get(\"accessibility_enabled\"):\n"
+            f"                print(\"✅ Detected AutoGLM Helper (accessibility). Skipping ADB Keyboard check.\\n\")\n"
+            f"                return True\n"
+            f"        except Exception:\n"
+            f"            pass\n"
+            f"    # === End Hybrid(Helper) Patch ===\n"
+        )
+        s = s.replace(needle, helper_block, 1)
+        main_py.write_text(s, encoding="utf-8")
+PY
+
+    # 2) Overwrite adb modules with Helper-aware implementations (keep ADB as fallback)
+    adb_dir="$HOME/Open-AutoGLM/phone_agent/adb"
+    mkdir -p "$adb_dir"
+
+    cat > "$adb_dir/input.py" <<'PY'
+"""Input utilities for Android device text input.
+
+Hybrid mode:
+- If AUTOGLM_HELPER_URL is set and reachable, use AutoGLM Helper (/input) to type/clear text.
+- Otherwise, fall back to original ADB Keyboard broadcast approach.
+"""
+
+import base64
+import json
+import os
+import subprocess
+from urllib.error import URLError
+from urllib.request import Request, urlopen
+
+
+def _get_helper_url() -> str | None:
+    url = os.getenv("AUTOGLM_HELPER_URL")
+    if not url:
+        return None
+    return url.rstrip("/")
+
+
+def _helper_post(path: str, payload: dict, timeout: int = 5) -> bool:
+    base = _get_helper_url()
+    if not base:
+        return False
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = Request(
+            base + path,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8")
+        if resp.status != 200:
+            return False
+        try:
+            j = json.loads(body)
+            return bool(j.get("success", False))
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
+def type_text(text: str, device_id: str | None = None) -> None:
+    """
+    Type text into the currently focused input field.
+
+    In hybrid mode, this uses AutoGLM Helper accessibility (/input),
+    so ADB Keyboard is NOT required.
+    """
+    if _get_helper_url():
+        if _helper_post("/input", {"text": text}):
+            return
+        # If helper is set but temporarily unavailable, fall back to ADB path below.
+
+    adb_prefix = _get_adb_prefix(device_id)
+    encoded_text = base64.b64encode(text.encode("utf-8")).decode("utf-8")
+    subprocess.run(
+        adb_prefix
+        + [
+            "shell",
+            "am",
+            "broadcast",
+            "-a",
+            "ADB_INPUT_B64",
+            "--es",
+            "msg",
+            encoded_text,
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+
+def clear_text(device_id: str | None = None) -> None:
+    """Clear text in the currently focused input field."""
+    if _get_helper_url():
+        if _helper_post("/input", {"text": ""}):
+            return
+
+    adb_prefix = _get_adb_prefix(device_id)
+    subprocess.run(
+        adb_prefix + ["shell", "am", "broadcast", "-a", "ADB_CLEAR_TEXT"],
+        capture_output=True,
+        text=True,
+    )
+
+
+def detect_and_set_adb_keyboard(device_id: str | None = None) -> str:
+    """
+    Detect current keyboard and switch to ADB Keyboard if needed.
+
+    In hybrid mode, this becomes a no-op.
+    """
+    if _get_helper_url():
+        return ""
+
+    adb_prefix = _get_adb_prefix(device_id)
+    result = subprocess.run(
+        adb_prefix + ["shell", "settings", "get", "secure", "default_input_method"],
+        capture_output=True,
+        text=True,
+    )
+    current_ime = (result.stdout + result.stderr).strip()
+    if "com.android.adbkeyboard/.AdbIME" not in current_ime:
+        subprocess.run(
+            adb_prefix + ["shell", "ime", "set", "com.android.adbkeyboard/.AdbIME"],
+            capture_output=True,
+            text=True,
+        )
+    # Warm up
+    type_text("", device_id)
+    return current_ime
+
+
+def restore_keyboard(ime: str, device_id: str | None = None) -> None:
+    """Restore the original keyboard IME (no-op in hybrid mode)."""
+    if _get_helper_url():
         return
-    }
+    if not ime:
+        return
+    adb_prefix = _get_adb_prefix(device_id)
+    subprocess.run(
+        adb_prefix + ["shell", "ime", "set", ime], capture_output=True, text=True
+    )
 
-    # 尝试启用并切换输入法（不同系统可能限制，失败则提示手动开启）
-    adb shell ime enable com.android.adbkeyboard/.AdbIME >/dev/null 2>&1 || true
-    adb shell ime set com.android.adbkeyboard/.AdbIME >/dev/null 2>&1 || true
 
-    print_success "ADB Keyboard 安装完成（如仍未生效，请在系统设置里启用并切换到 ADB Keyboard）"
+def _get_adb_prefix(device_id: str | None) -> list:
+    if device_id:
+        return ["adb", "-s", device_id]
+    return ["adb"]
+PY
+
+    cat > "$adb_dir/device.py" <<'PY'
+"""Device control utilities for Android automation.
+
+Hybrid mode:
+- If AUTOGLM_HELPER_URL is set, use AutoGLM Helper accessibility for tap/swipe/long-press
+  and optionally current app detection.
+- Keep ADB as fallback for actions not covered by Helper (launch/back/home, etc.).
+"""
+
+import json
+import os
+import subprocess
+import time
+from urllib.request import Request, urlopen
+
+from phone_agent.config.apps import APP_PACKAGES
+from phone_agent.config.speed import ACTION_DELAY, LAUNCH_DELAY
+
+
+def _get_helper_url() -> str | None:
+    url = os.getenv("AUTOGLM_HELPER_URL")
+    if not url:
+        return None
+    return url.rstrip("/")
+
+
+def _helper_get(path: str, timeout: int = 3) -> dict | None:
+    base = _get_helper_url()
+    if not base:
+        return None
+    try:
+        req = Request(base + path, method="GET")
+        with urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8")
+        if resp.status != 200:
+            return None
+        return json.loads(body)
+    except Exception:
+        return None
+
+
+def _helper_post(path: str, payload: dict, timeout: int = 5) -> dict | None:
+    base = _get_helper_url()
+    if not base:
+        return None
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = Request(
+            base + path,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8")
+        if resp.status != 200:
+            return None
+        return json.loads(body)
+    except Exception:
+        return None
+
+
+def get_current_app(device_id: str | None = None) -> str:
+    """
+    Get the currently focused app name.
+    """
+    # Prefer Helper (if it implements /current_app)
+    data = _helper_get("/current_app")
+    if data and data.get("accessibility_enabled") and data.get("package"):
+        pkg = data["package"]
+        for app_name, package in APP_PACKAGES.items():
+            if package == pkg:
+                return app_name
+        return str(pkg)
+
+    # Fallback to ADB dumpsys
+    adb_prefix = _get_adb_prefix(device_id)
+    result = subprocess.run(
+        adb_prefix + ["shell", "dumpsys", "window"], capture_output=True, text=True
+    )
+    output = result.stdout
+    for line in output.split("\n"):
+        if "mCurrentFocus" in line or "mFocusedApp" in line:
+            for app_name, package in APP_PACKAGES.items():
+                if package in line:
+                    return app_name
+    return "System Home"
+
+
+def tap(x: int, y: int, device_id: str | None = None, delay: float = ACTION_DELAY) -> None:
+    # Prefer Helper
+    resp = _helper_post("/tap", {"x": x, "y": y}, timeout=5)
+    if resp and resp.get("success") is True:
+        time.sleep(delay)
+        return
+
+    adb_prefix = _get_adb_prefix(device_id)
+    subprocess.run(
+        adb_prefix + ["shell", "input", "tap", str(x), str(y)], capture_output=True
+    )
+    time.sleep(delay)
+
+
+def double_tap(x: int, y: int, device_id: str | None = None, delay: float = ACTION_DELAY) -> None:
+    # Helper: two taps
+    base = _get_helper_url()
+    if base:
+        tap(x, y, device_id=device_id, delay=0.1)
+        tap(x, y, device_id=device_id, delay=delay)
+        return
+
+    adb_prefix = _get_adb_prefix(device_id)
+    subprocess.run(
+        adb_prefix + ["shell", "input", "tap", str(x), str(y)], capture_output=True
+    )
+    time.sleep(0.1)
+    subprocess.run(
+        adb_prefix + ["shell", "input", "tap", str(x), str(y)], capture_output=True
+    )
+    time.sleep(delay)
+
+
+def long_press(
+    x: int,
+    y: int,
+    duration_ms: int = 3000,
+    device_id: str | None = None,
+    delay: float = ACTION_DELAY,
+) -> None:
+    # Helper: use swipe with same start/end to emulate long press
+    resp = _helper_post(
+        "/swipe",
+        {"x1": x, "y1": y, "x2": x, "y2": y, "duration": int(duration_ms)},
+        timeout=10,
+    )
+    if resp and resp.get("success") is True:
+        time.sleep(delay)
+        return
+
+    adb_prefix = _get_adb_prefix(device_id)
+    subprocess.run(
+        adb_prefix
+        + ["shell", "input", "swipe", str(x), str(y), str(x), str(y), str(duration_ms)],
+        capture_output=True,
+    )
+    time.sleep(delay)
+
+
+def swipe(
+    start_x: int,
+    start_y: int,
+    end_x: int,
+    end_y: int,
+    duration_ms: int | None = None,
+    device_id: str | None = None,
+    delay: float = ACTION_DELAY,
+) -> None:
+    if duration_ms is None:
+        dist_sq = (start_x - end_x) ** 2 + (start_y - end_y) ** 2
+        duration_ms = int(dist_sq / 1000)
+        duration_ms = max(1000, min(duration_ms, 2000))
+
+    resp = _helper_post(
+        "/swipe",
+        {"x1": start_x, "y1": start_y, "x2": end_x, "y2": end_y, "duration": int(duration_ms)},
+        timeout=10,
+    )
+    if resp and resp.get("success") is True:
+        time.sleep(delay)
+        return
+
+    adb_prefix = _get_adb_prefix(device_id)
+    subprocess.run(
+        adb_prefix
+        + [
+            "shell",
+            "input",
+            "swipe",
+            str(start_x),
+            str(start_y),
+            str(end_x),
+            str(end_y),
+            str(duration_ms),
+        ],
+        capture_output=True,
+    )
+    time.sleep(delay)
+
+
+def back(device_id: str | None = None, delay: float = ACTION_DELAY) -> None:
+    adb_prefix = _get_adb_prefix(device_id)
+    subprocess.run(adb_prefix + ["shell", "input", "keyevent", "4"], capture_output=True)
+    time.sleep(delay)
+
+
+def home(device_id: str | None = None, delay: float = ACTION_DELAY) -> None:
+    adb_prefix = _get_adb_prefix(device_id)
+    subprocess.run(
+        adb_prefix + ["shell", "input", "keyevent", "KEYCODE_HOME"], capture_output=True
+    )
+    time.sleep(delay)
+
+
+def launch_app(app_name: str, device_id: str | None = None, delay: float = LAUNCH_DELAY) -> bool:
+    if app_name not in APP_PACKAGES:
+        return False
+    adb_prefix = _get_adb_prefix(device_id)
+    package = APP_PACKAGES[app_name]
+    subprocess.run(
+        adb_prefix
+        + [
+            "shell",
+            "monkey",
+            "-p",
+            package,
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "1",
+        ],
+        capture_output=True,
+    )
+    time.sleep(delay)
+    return True
+
+
+def _get_adb_prefix(device_id: str | None) -> list:
+    if device_id:
+        return ["adb", "-s", device_id]
+    return ["adb"]
+PY
+
+    cat > "$adb_dir/screenshot.py" <<'PY'
+"""Screenshot utilities for capturing Android device screen.
+
+Hybrid mode:
+- If AUTOGLM_HELPER_URL is set, try GET /screenshot and convert to PNG base64.
+- Otherwise, fall back to ADB screencap.
+"""
+
+import base64
+import json
+import os
+import subprocess
+import tempfile
+import uuid
+from dataclasses import dataclass
+from io import BytesIO
+from urllib.request import Request, urlopen
+
+from PIL import Image
+
+
+@dataclass
+class Screenshot:
+    base64_data: str
+    width: int
+    height: int
+    is_sensitive: bool = False
+
+
+def _get_helper_url() -> str | None:
+    url = os.getenv("AUTOGLM_HELPER_URL")
+    if not url:
+        return None
+    return url.rstrip("/")
+
+
+def get_screenshot(device_id: str | None = None, timeout: int = 5) -> Screenshot:
+    helper = _get_helper_url()
+    if helper:
+        try:
+            req = Request(helper + "/screenshot", method="GET")
+            with urlopen(req, timeout=timeout) as resp:
+                body = resp.read().decode("utf-8")
+            if resp.status == 200:
+                data = json.loads(body)
+                if data.get("success") and data.get("image"):
+                    raw = base64.b64decode(data["image"])
+                    img = Image.open(BytesIO(raw))
+                    width, height = img.size
+                    buffered = BytesIO()
+                    img.save(buffered, format="PNG")
+                    b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                    return Screenshot(base64_data=b64, width=width, height=height, is_sensitive=False)
+        except Exception:
+            # Helper not reachable: fall back to ADB
+            pass
+
+    temp_path = os.path.join(tempfile.gettempdir(), f"screenshot_{uuid.uuid4()}.png")
+    adb_prefix = _get_adb_prefix(device_id)
+    try:
+        result = subprocess.run(
+            adb_prefix + ["shell", "screencap", "-p", "/sdcard/tmp.png"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        output = result.stdout + result.stderr
+        if "Status: -1" in output or "Failed" in output:
+            return _create_fallback_screenshot(is_sensitive=True)
+        subprocess.run(
+            adb_prefix + ["pull", "/sdcard/tmp.png", temp_path],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if not os.path.exists(temp_path):
+            return _create_fallback_screenshot(is_sensitive=False)
+        img = Image.open(temp_path)
+        width, height = img.size
+        buffered = BytesIO()
+        img.save(buffered, format="PNG")
+        base64_data = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        os.remove(temp_path)
+        return Screenshot(base64_data=base64_data, width=width, height=height, is_sensitive=False)
+    except Exception as e:
+        print(f"Screenshot error: {e}")
+        return _create_fallback_screenshot(is_sensitive=False)
+
+
+def _get_adb_prefix(device_id: str | None) -> list:
+    if device_id:
+        return ["adb", "-s", device_id]
+    return ["adb"]
+
+
+def _create_fallback_screenshot(is_sensitive: bool) -> Screenshot:
+    default_width, default_height = 1080, 2400
+    black_img = Image.new("RGB", (default_width, default_height), color="black")
+    buffered = BytesIO()
+    black_img.save(buffered, format="PNG")
+    base64_data = base64.b64encode(buffered.getvalue()).decode("utf-8")
+    return Screenshot(
+        base64_data=base64_data,
+        width=default_width,
+        height=default_height,
+        is_sensitive=is_sensitive,
+    )
+PY
+
+    print_success "Open-AutoGLM 补丁完成（Helper 优先，ADB Keyboard 不再是硬依赖）"
 }
 
 # 显示完成信息
@@ -341,7 +843,7 @@ show_completion() {
     echo "故障排除:"
     echo "  - 检查 AutoGLM Helper 是否运行"
     echo "  - 检查无障碍权限是否开启"
-    echo "  - 测试连接: curl http://localhost:8080/status"
+    echo "  - 测试连接: curl http://127.0.0.1:8080/status"
     echo ""
     echo "============================================================"
     echo ""
@@ -367,7 +869,7 @@ main() {
     download_hybrid_scripts
     configure_grsai
     create_launcher
-    ensure_adb_keyboard
+    patch_open_autoglm_for_helper
     check_helper_app
     show_completion
 }
